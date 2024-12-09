@@ -129,7 +129,7 @@ def run():
 
 # Set up GUI
 root = tk.Tk()
-root.title("Amazon Image Downloader")
+root.title("AmazonImageDownloader")
 root.configure(bg="#E6E6FA")  # Pastel purple background
 
 font_style = ("Arial", 12)
