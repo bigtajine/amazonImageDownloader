@@ -9,23 +9,34 @@ from bs4 import BeautifulSoup
 import re
 import requests
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Author: bigtajine
-# Script Name: AmazonImageDownloader.py
-# Last Modified: 2024-11-20
+# Script Name: amazonImageDownloader.py
+# Last Modified: 2025-04-08
 
 # Country options for Amazon websites
 country_options = {
-    "Amazon de": ("de", "de"),
-    "Amazon co.uk": ("co.uk", "en"),
-    "Amazon com.be": ("com.be", "fr"),
-    "Amazon fr": ("fr", "fr"),
-    "Amazon es": ("es", "es"),
-    "Amazon se": ("se", "sv"),
-    "Amazon nl": ("nl", "nl"),
-    "Amazon it": ("it", "it"),
-    "Amazon pl": ("pl", "pl")
+    "Amazon.com": ("com", "en"),
+    "Amazon.ca": ("ca", "en"),
+    "Amazon.co.uk": ("co.uk", "en"),
+    "Amazon.de": ("de", "de"),
+    "Amazon.fr": ("fr", "fr"),
+    "Amazon.it": ("it", "it"),
+    "Amazon.es": ("es", "es"),
+    "Amazon.com.mx": ("com.mx", "es"),
+    "Amazon.in": ("in", "hi"),
+    "Amazon.com.br": ("com.br", "pt"),
+    "Amazon.au": ("au", "en"),
+    "Amazon.nl": ("nl", "nl"),
+    "Amazon.sg": ("sg", "en"),
+    "Amazon.se": ("se", "sv"),
+    "Amazon.pl": ("pl", "pl"),
+    "Amazon.sa": ("sa", "ar"),
+    "Amazon.ae": ("ae", "ar"),
+    "Amazon.co.il": ("co.il", "he"),
+    "Amazon.tr": ("tr", "tr")
 }
 
 def extract_image_urls(driver, asin, country):
@@ -52,11 +63,14 @@ def extract_image_urls(driver, asin, country):
 
 def save_images(image_urls, asin, save_dir):
     for idx, url in enumerate(image_urls, 1):
-        response = requests.get(url)
-        if response.status_code == 200:
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Will raise an HTTPError if the status code isn't 200
             file_path = os.path.join(save_dir, f'{asin}_{idx}.jpg')
             with open(file_path, 'wb') as f:
                 f.write(response.content)
+        except requests.exceptions.RequestException as e:
+            print(f"Error downloading {url}: {e}")
 
 def process_single_asin(asin, countries, base_save_dir):
     # Configure Chrome options
@@ -64,6 +78,8 @@ def process_single_asin(asin, countries, base_save_dir):
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
+    
+    # Automatically use webdriver_manager to manage the driver installation
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
     print(f'Processing ASIN: {asin}')
@@ -87,12 +103,17 @@ def process_asins(file_path, countries, save_dir, progress_bar, total_asins):
         futures = []
         with open(file_path, 'r') as file:
             asins = [line.strip() for line in file.readlines()]
-        
+
         for asin in asins:
             futures.append(executor.submit(process_single_asin, asin, countries, save_dir))
-        
+
         for index, future in enumerate(as_completed(futures), start=1):
-            future.result()
+            try:
+                future.result()  # Get the result of the future, which will re-raise any exceptions
+            except Exception as e:
+                print(f"Error processing ASIN: {asin} - {e}")
+
+            # Update progress bar
             progress_bar['value'] = (index / total_asins) * 100
             root.update_idletasks()
 
@@ -122,42 +143,49 @@ def run():
         messagebox.showerror("Error", "Please select at least one country.")
         return
 
-    with open(file_path, 'r') as file:
-        total_asins = len(file.readlines())
-    
-    process_asins(file_path, selected_countries, save_dir, progress_bar, total_asins)
+    try:
+        with open(file_path, 'r') as file:
+            total_asins = len(file.readlines())
+    except FileNotFoundError:
+        messagebox.showerror("Error", f"File not found: {file_path}")
+        return
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to read file: {e}")
+        return
+
+    # Start the task in a separate thread
+    threading.Thread(target=process_asins, args=(file_path, selected_countries, save_dir, progress_bar, total_asins)).start()
 
 # Set up GUI
 root = tk.Tk()
-root.title("AmazonImageDownloader")
-root.configure(bg="#E6E6FA")  # Pastel purple background
+root.title("amazonImageDownloader")
 
-font_style = ("Arial", 12)
+font_style = ("Cascadia Mono", 10)
 
-frame = tk.Frame(root, bg="#E6E6FA")
+frame = tk.Frame(root)
 frame.pack(padx=10, pady=10)
 
 country_var = tk.StringVar()
 
-tk.Label(frame, text="Country:", bg="#E6E6FA", fg="black", font=font_style).pack(anchor=tk.W)
-country_menu = tk.Listbox(frame, listvariable=country_var, selectmode='multiple', bg="#D8BFD8", fg="black", font=font_style)
+tk.Label(frame, text="Country:", font=font_style).pack(anchor=tk.W)
+country_menu = tk.Listbox(frame, listvariable=country_var, selectmode='multiple', font=font_style)
 for country in country_options.keys():
     country_menu.insert(tk.END, country)
 country_menu.pack(fill=tk.X, padx=5, pady=5)
 
-tk.Label(frame, text="ASINs File:", bg="#E6E6FA", fg="black", font=font_style).pack(anchor=tk.W)
-file_label = tk.Label(frame, text="No file selected", bg="#F8F8FF", fg="black", font=font_style)
+tk.Label(frame, text="ASINs File:", font=font_style).pack(anchor=tk.W)
+file_label = tk.Label(frame, text="No file selected", font=font_style)
 file_label.pack(fill=tk.X, padx=5, pady=5)
-select_file_button = tk.Button(frame, text="Select File", command=select_file, bg="#D8BFD8", fg="black", font=font_style)
+select_file_button = tk.Button(frame, text="Select File", command=select_file, font=font_style)
 select_file_button.pack(fill=tk.X, padx=5, pady=5)
 
-tk.Label(frame, text="Save Directory:", bg="#E6E6FA", fg="black", font=font_style).pack(anchor=tk.W)
-directory_label = tk.Label(frame, text="No directory selected", bg="#F8F8FF", fg="black", font=font_style)
+tk.Label(frame, text="Save Directory:", font=font_style).pack(anchor=tk.W)
+directory_label = tk.Label(frame, text="No directory selected", font=font_style)
 directory_label.pack(fill=tk.X, padx=5, pady=5)
-select_directory_button = tk.Button(frame, text="Select Directory", command=select_directory, bg="#D8BFD8", fg="black", font=font_style)
+select_directory_button = tk.Button(frame, text="Select Directory", command=select_directory, font=font_style)
 select_directory_button.pack(fill=tk.X, padx=5, pady=5)
 
-run_button = tk.Button(root, text="Run", command=run, bg="#DDA0DD", fg="black", font=font_style)
+run_button = tk.Button(root, text="Run", command=run, font=font_style)
 run_button.pack(pady=10)
 
 progress_bar = Progressbar(root, orient=tk.HORIZONTAL, length=300, mode='determinate')
